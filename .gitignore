@@ -1,0 +1,155 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+myenv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# Video Files (too large for repository)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.m4v
+*.webm
+*.zip
+
+# Model Files (provide download links instead)
+*.pt
+*.pth
+*.onnx
+*.pkl
+*.h5
+*.pb
+*.tflite
+*.engine
+*.trt
+
+# Log Files
+*.log
+*.csv
+*_log.csv
+*_summary_log.csv
+output_log.csv
+vehicle_log.csv
+
+# Output Directories
+vehicle_captures/
+captured_objects/
+frames/
+frames-*/
+Result/
+runs/
+dataset/output/
+output/
+Video_Baru/
+
+# Configuration Files with Sensitive Data
+*_config.json
+*_config.yaml
+traffic_analyzer_config.json
+traffic_analyzer_config.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Documentation builds
+docs/_build/
+site/
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Personal/Test Data
+*.docx
+*.xlsx
+Screenshot*
+Region*.png
+Detection*.png
+
+# Large Data Files
+*.db
+*.sqlite
+*.sqlite3
+
+# MQTT Certificates (if using)
+*.pem
+*.key
+*.crt
+*.cert
+
+# Specific Project Files (if not needed in repo)
+get-pip.py
+
+# Keep structure but ignore content in some directories
+!dataset/.gitkeep
+!examples/videos/.gitkeep
+!examples/models/.gitkeep

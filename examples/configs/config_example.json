@@ -1,0 +1,11 @@
+{
+    "perspective_points": [
+        [904, 209],
+        [1141, 145],
+        [1917, 613],
+        [1601, 965]
+    ],
+    "run_date": "2024-01-01",
+    "run_start_time": "08:00:00",
+    "note": "Replace perspective_points with coordinates from your video frame. These are used for speed estimation."
+}
