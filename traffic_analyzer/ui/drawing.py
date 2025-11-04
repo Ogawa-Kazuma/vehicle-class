@@ -76,19 +76,36 @@ class DrawingUtils:
             color: BGR color tuple
             filled: Whether to fill polygon
         """
-        if len(points) < 2:
+        if len(points) == 0:
             return
         
-        pts = np.array(points, dtype=np.int32)
+        # Draw connecting lines if we have 2+ points
+        if len(points) >= 2:
+            pts = np.array(points, dtype=np.int32)
+            
+            if filled:
+                cv2.fillPoly(frame, [pts], color)
+            else:
+                # Draw lines between consecutive points
+                for i in range(len(points)):
+                    if i == 0:
+                        continue
+                    cv2.line(frame, points[i-1], points[i], color, 2)
+                # If polygon is closed (3+ points), draw last line
+                if len(points) >= 3:
+                    cv2.line(frame, points[-1], points[0], color, 2)
         
-        if filled:
-            cv2.fillPoly(frame, [pts], color)
-        else:
-            cv2.polylines(frame, [pts], True, color, 2)
-        
-        # Draw points
-        for pt in points:
-            cv2.circle(frame, pt, 5, color, -1)
+        # Always draw points (even for single point)
+        point_color = (0, 255, 255)  # Cyan color for points
+        point_radius = 8  # Larger radius for visibility
+        for i, pt in enumerate(points):
+            # Draw filled circle
+            cv2.circle(frame, pt, point_radius, point_color, -1)
+            # Draw border
+            cv2.circle(frame, pt, point_radius, (255, 255, 255), 2)
+            # Draw point number
+            cv2.putText(frame, str(i+1), (pt[0]-5, pt[1]-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
     
     def draw_counting_line(self, frame: np.ndarray, line_y: int,
                           color: Tuple[int, int, int] = (255, 0, 0)):

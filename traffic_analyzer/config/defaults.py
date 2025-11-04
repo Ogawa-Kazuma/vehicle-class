@@ -23,7 +23,9 @@ DEFAULT_CONFIG = {
     'tracker_max_disappeared': 10,
     
     # ROI and counting
+    'roi_polygon': [],  # List of (x, y) tuples for polygon ROI
     'counting_line_y': 250,
+    'counting_line_mode': 'AUTO',  # 'AUTO' or 'MANUAL'
     'counting_direction': 'down',  # 'down', 'up', 'both'
     'line_debounce_pixels': 5,
     

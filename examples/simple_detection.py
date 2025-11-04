@@ -20,7 +20,34 @@ from traffic_analyzer.io.video import VideoCapture
 
 def main():
     # Initialize components
-    detector = YOLODetector(model_path='yolov8s.pt', conf_threshold=0.25)
+    model_path = 'yolov8s.pt'
+    detector = YOLODetector(model_path=model_path, conf_threshold=0.25)
+    
+    # Check model.names to detect if it's custom or COCO
+    # Custom models have names like {0: 'Class 1', 1: 'Class 2', ...}
+    # COCO models have names like {0: 'person', 1: 'bicycle', 2: 'car', ...}
+    model_names = detector.model.names
+    is_custom_model = False
+    
+    # Check if model outputs classes 0-5 with "Class" names
+    if len(model_names) <= 10:  # Custom models usually have 6 classes
+        # Check if first few names contain "Class" or match custom pattern
+        first_names = [model_names.get(i, '') for i in range(min(6, len(model_names)))]
+        if any('Class' in name or 'Kelas' in name for name in first_names if name):
+            is_custom_model = True
+        # Also check if model names match custom pattern: Class 1, Class 2, etc.
+        elif len(model_names) == 6 and all(str(i+1) in model_names.get(i, '') or 'Class' in model_names.get(i, '') for i in range(6)):
+            is_custom_model = True
+    
+    # If using custom model, we need to map directly
+    if is_custom_model:
+        print(f"[INFO] Using custom model: {model_path}")
+        print(f"[INFO] Model class names: {dict(model_names)}")
+        print("[INFO] Model outputs classes 0-5 directly (Kelas 1-6)")
+    else:
+        print(f"[INFO] Using COCO model: {model_path}")
+        print(f"[INFO] Model class names (sample): {dict(list(model_names.items())[:10])}")
+    
     drawer = DrawingUtils()
     
     # Open video
@@ -38,7 +65,9 @@ def main():
                 break
             
             # Detect vehicles
-            detections = detector.detect(frame)
+            # For custom models, detect all classes 0-5; for COCO, use default [2,3,5,7]
+            detect_classes = None if not is_custom_model else list(range(6))
+            detections = detector.detect(frame, classes=detect_classes)
             
             # Draw detections
             for det in detections:

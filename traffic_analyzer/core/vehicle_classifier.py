@@ -95,7 +95,8 @@ class VehicleClassifier:
         
         # 6-class mapping with size thresholds
         if coco_class_id == self.COCO_CAR:
-            if width >= self.size_thresholds['Class 1'][0] and width < self.size_thresholds['Class 2'][0]:
+            # Cars smaller than Class 1 threshold should still be Class 1
+            if width < self.size_thresholds['Class 2'][0]:
                 return 'Class 1'
             elif width >= self.size_thresholds['Class 2'][0] and width < self.size_thresholds['Class 3'][0]:
                 return 'Class 2'

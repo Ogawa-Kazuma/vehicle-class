@@ -17,7 +17,35 @@ from traffic_analyzer.tracking import CentroidTracker
 from traffic_analyzer.geometry import ROIManager, CountingLine, CrossingDetector
 from traffic_analyzer.io import VideoCapture, VehicleLogger, ImageSaver
 from traffic_analyzer.ui import DrawingUtils, ButtonManager, MouseHandler
+from traffic_analyzer.config import ConfigLoader
 from datetime import datetime
+import re
+
+
+def create_config_key(source):
+    """
+    Create a safe config key from stream source.
+    
+    Args:
+        source: Camera index (int) or RTSP URL (str)
+        
+    Returns:
+        Config key string
+    """
+    if isinstance(source, int):
+        return f"camera_{source}"
+    elif isinstance(source, str):
+        # Create safe filename from URL
+        # Remove protocol and special characters
+        safe_key = re.sub(r'^https?://', '', source)
+        safe_key = re.sub(r'[:/?#\[\]@!$&\'()*+,;=]', '_', safe_key)
+        safe_key = safe_key.replace('.', '_')
+        # Limit length
+        if len(safe_key) > 50:
+            safe_key = safe_key[:50]
+        return safe_key
+    else:
+        return "unknown_source"
 
 
 def main():
@@ -35,16 +63,86 @@ def main():
         except ValueError:
             source = source_input  # Keep as string (RTSP URL)
     
+    # Create config key for this source
+    config_key = create_config_key(source)
+    print(f"[INFO] Config key: {config_key}")
+    
+    # Initialize config loader
+    config_loader = ConfigLoader()
+    
+    # Load saved config (using config_key as virtual video path)
+    config = config_loader.load(config_key)
+    
     # Initialize
     state = AppState()
-    detector = YOLODetector(model_path='yolov8s.pt', conf_threshold=0.25)
-    tracker = CentroidTracker(max_distance=50, max_disappeared=10)
-    classifier = VehicleClassifier()
+    model_path = config.get('yolo_model', 'yolov8s.pt')
+    detector = YOLODetector(
+        model_path=model_path,
+        conf_threshold=config.get('conf_threshold', 0.25),
+        iou_threshold=config.get('iou_threshold', 0.45)
+    )
+    
+    # Check model.names to detect if it's custom or COCO
+    # Custom models have names like {0: 'Class 1', 1: 'Class 2', ...}
+    # COCO models have names like {0: 'person', 1: 'bicycle', 2: 'car', ...}
+    model_names = detector.model.names
+    is_custom_model = False
+    
+    # Check if model outputs classes 0-5 with "Class" names
+    if len(model_names) <= 10:  # Custom models usually have 6 classes
+        # Check if first few names contain "Class" or match custom pattern
+        first_names = [model_names.get(i, '') for i in range(min(6, len(model_names)))]
+        if any('Class' in name or 'Kelas' in name for name in first_names if name):
+            is_custom_model = True
+        # Also check if model names match custom pattern: Class 1, Class 2, etc.
+        elif len(model_names) == 6 and all(str(i+1) in model_names.get(i, '') or 'Class' in model_names.get(i, '') for i in range(6)):
+            is_custom_model = True
+    
+    # If using custom model, we need to map directly
+    if is_custom_model:
+        print(f"[INFO] Using custom model: {model_path}")
+        print(f"[INFO] Model class names: {dict(model_names)}")
+        print("[INFO] Model outputs classes 0-5 directly (Kelas 1-6)")
+    else:
+        print(f"[INFO] Using COCO model: {model_path}")
+        print(f"[INFO] Model class names (sample): {dict(list(model_names.items())[:10])}")
+        print("[INFO] Will map COCO classes (2,3,5,7) to custom classes")
+    
+    tracker = CentroidTracker(
+        max_distance=config.get('tracker_max_distance', 50),
+        max_disappeared=config.get('tracker_max_disappeared', 10)
+    )
+    classifier = VehicleClassifier(
+        size_thresholds=config.get('size_thresholds'),
+        use_six_class=config.get('use_six_class', True)
+    )
     roi_manager = ROIManager()
     counting_line = CountingLine()
-    crossing_detector = CrossingDetector(debounce_pixels=5)
+    crossing_detector = CrossingDetector(debounce_pixels=config.get('line_debounce_pixels', 5))
     drawer = DrawingUtils()
     button_manager = ButtonManager()
+    
+    # Restore saved ROI polygon if available
+    saved_roi = config.get('roi_polygon', [])
+    if saved_roi and len(saved_roi) >= 3:
+        # Convert to tuples if needed
+        roi_manager.polygon_points = [tuple(p) if isinstance(p, (list, tuple)) else p for p in saved_roi]
+        roi_manager.polygon_defined = True
+        print(f"[INFO] Loaded saved ROI polygon with {len(roi_manager.polygon_points)} points")
+    else:
+        print("[INFO] No saved ROI polygon found, starting fresh")
+    
+    # Restore counting line if available
+    saved_line_y = config.get('counting_line_y')
+    if saved_line_y is not None:
+        counting_line.line_y = saved_line_y
+    saved_line_mode = config.get('counting_line_mode', 'AUTO')
+    counting_line.mode = saved_line_mode
+    if saved_line_mode == 'AUTO' and roi_manager.polygon_defined:
+        counting_line.set_auto(roi_manager.get_polygon_mid_y())
+        print(f"[INFO] Restored counting line mode: AUTO (y={counting_line.line_y})")
+    else:
+        print(f"[INFO] Restored counting line: y={counting_line.line_y}, mode={saved_line_mode}")
     
     # Setup logging
     video_name = f"live_stream_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -63,20 +161,55 @@ def main():
         elif button_name == "Exit":
             state.running = False
         elif button_name == "Poly":
-            state.roi.poly_editing = not state.roi.poly_editing
-            if not state.roi.poly_editing:
+            # Toggle poly editing mode
+            new_value = not roi_manager.poly_editing
+            roi_manager.poly_editing = new_value
+            state.roi.poly_editing = new_value  # Sync state
+            # Also sync with state.roi_manager if it exists
+            if hasattr(state, 'roi_manager'):
+                state.roi_manager.poly_editing = new_value
+            print(f"[DEBUG] Poly button clicked: roi_manager.poly_editing = {roi_manager.poly_editing}")
+            if roi_manager.poly_editing:
+                # Starting polygon editing - clear previous points
+                roi_manager.reset()
+                # Don't clear poly_editing in reset, we just set it!
+                roi_manager.poly_editing = True  # Re-set after reset
+                if hasattr(state, 'roi_manager'):
+                    state.roi_manager.poly_editing = True
+                state.roi.poly_editing = True
+                state.roi.polygon_points = []
+                print("[INFO] Polygon edit mode: left-click to add points, right-click or 'p' to close.")
+            else:
+                # Ending polygon editing
                 roi_manager.finalize_polygon()
+                state.roi.polygon_defined = roi_manager.polygon_defined
+                state.roi.polygon_points = roi_manager.polygon_points.copy()
                 if state.width and state.height:
                     roi_manager.rebuild_mask((state.height, state.width, 3))
+                print(f"[INFO] Polygon defined with {len(roi_manager.polygon_points)} points")
         elif button_name == "Line":
             state.counting_line.edit_mode = True
+            counting_line.edit_mode = True
+            print("[INFO] Line edit mode: click anywhere to set counting line (press 'A' for AUTO).")
     
     def on_roi_click(point, state):
-        if state.width and state.height:
+        print(f"[DEBUG] on_roi_click called with point {point}")
+        # Add point to both roi_manager and state
+        roi_manager.add_point(point)
+        state.roi.polygon_points.append(point)
+        # Only rebuild mask if we have enough points, otherwise just draw points
+        if len(roi_manager.polygon_points) >= 3 and state.width and state.height:
             roi_manager.rebuild_mask((state.height, state.width, 3))
+        print(f"[INFO] Added point {point}, total points: {len(roi_manager.polygon_points)}")
     
     def on_line_click(y, state):
         state.counting_line.edit_mode = False
+        counting_line.edit_mode = False
+        print(f"[INFO] Counting line set to y={counting_line.line_y}")
+    
+    # Attach managers to state for mouse handler access (before creating callback)
+    state.roi_manager = roi_manager
+    state.counting_line_obj = counting_line
     
     mouse_handler = MouseHandler(
         button_manager,
@@ -91,6 +224,17 @@ def main():
             state.width = cap.width
             state.height = cap.height
             
+            # Sync restored ROI with state and rebuild mask if polygon is defined
+            if roi_manager.polygon_defined and len(roi_manager.polygon_points) >= 3:
+                state.roi.polygon_points = roi_manager.polygon_points.copy()
+                state.roi.polygon_defined = True
+                roi_manager.rebuild_mask((state.height, state.width, 3))
+                print(f"[INFO] Rebuilt ROI mask for stream dimensions: {state.width}x{state.height}")
+            
+            # Sync counting line with state
+            state.counting_line.line_y = counting_line.line_y
+            state.count_direction = config.get('counting_direction', 'down')
+            
             print(f"Stream opened: {cap.width}x{cap.height} @ {cap.fps:.2f} fps")
             print("Controls:")
             print("  - Click 'Poly' button, then click points on frame to define ROI")
@@ -98,7 +242,7 @@ def main():
             print("  - Click 'Start' to begin processing")
             print("  - Press 'q' to quit")
             
-            cv2.namedWindow("Live Stream Analyzer")
+            cv2.namedWindow("Live Stream Analyzer", cv2.WINDOW_NORMAL)
             cv2.setMouseCallback(
                 "Live Stream Analyzer",
                 mouse_handler.create_callback("Live Stream Analyzer", state)
@@ -117,13 +261,31 @@ def main():
                 display = frame.copy()
                 
                 # Draw UI
-                drawer.draw_polygon(display, roi_manager.polygon_points)
+                # Draw polygon with filled overlay if defined, otherwise just outline
+                if roi_manager.polygon_defined and len(roi_manager.polygon_points) >= 3:
+                    # Draw filled overlay
+                    overlay = display.copy()
+                    drawer.draw_polygon(overlay, roi_manager.polygon_points, filled=True)
+                    display = cv2.addWeighted(overlay, 0.15, display, 0.85, 0)
+                
+                # Always draw polygon outline and points (even during editing)
+                if len(roi_manager.polygon_points) > 0:
+                    drawer.draw_polygon(display, roi_manager.polygon_points, filled=False)
+                
                 drawer.draw_counting_line(display, counting_line.line_y)
                 button_manager.draw(display)
                 
+                # Debug info
+                if roi_manager.poly_editing:
+                    cv2.putText(display, f"Polygon Editing: {len(roi_manager.polygon_points)} points", 
+                               (10, display.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 
+                               0.6, (0, 255, 255), 2)
+                
                 # Processing
                 if state.start_processing and roi_manager.polygon_defined:
-                    detections = detector.detect(frame)
+                    # For custom models, detect all classes 0-5; for COCO, use default [2,3,5,7]
+                    detect_classes = None if not is_custom_model else list(range(6))
+                    detections = detector.detect(frame, classes=detect_classes)
                     
                     # Filter by ROI
                     filtered = []
@@ -148,10 +310,17 @@ def main():
                         if not det:
                             continue
                         
-                        # Classify
-                        custom_class = classifier.map_coco_to_custom(
-                            det['class_id'], det['width'], det['height']
-                        )
+                        # Classify - handle both COCO and custom models
+                        if is_custom_model:
+                            # Custom model outputs 0-5 directly, map to Class names
+                            class_map_custom = {0: 'Class 1', 1: 'Class 2', 2: 'Class 3', 
+                                               3: 'Class 4', 4: 'Class 5', 5: 'Class 6'}
+                            custom_class = class_map_custom.get(det['class_id'])
+                        else:
+                            # COCO model: map COCO classes to custom classes via size
+                            custom_class = classifier.map_coco_to_custom(
+                                det['class_id'], det['width'], det['height']
+                            )
                         
                         if not custom_class:
                             continue
@@ -232,6 +401,13 @@ def main():
         # Save final summary
         logger.log_summary(current_time, state.vehicle_counts.by_class)
         logger.close()
+        
+        # Save config (only if polygon is defined)
+        if roi_manager.polygon_defined and len(roi_manager.polygon_points) >= 3:
+            config_loader.save_roi(config_key, roi_manager.polygon_points)
+            print(f"[INFO] Saved ROI polygon configuration")
+        config_loader.save_counting_line(config_key, counting_line.line_y, counting_line.mode)
+        print(f"[INFO] Saved counting line configuration")
         
         print(f"\nProcessing complete!")
         print(f"Total vehicles counted: {sum(state.vehicle_counts.by_class.values())}")

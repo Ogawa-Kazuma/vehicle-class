@@ -1,0 +1,80 @@
+{
+  "yolo_model": "yolov8s.pt",
+  "conf_threshold": 0.25,
+  "iou_threshold": 0.45,
+  "device": null,
+  "motion_history": 500,
+  "motion_var_threshold": 25,
+  "detect_shadows": true,
+  "tracker_max_distance": 50,
+  "tracker_max_disappeared": 10,
+  "roi_polygon": [
+    [
+      38,
+      191
+    ],
+    [
+      186,
+      43
+    ],
+    [
+      307,
+      48
+    ],
+    [
+      379,
+      206
+    ]
+  ],
+  "counting_line_y": 192,
+  "counting_line_mode": "MANUAL",
+  "counting_direction": "down",
+  "line_debounce_pixels": 5,
+  "size_thresholds": {
+    "Class 1": [
+      60,
+      5
+    ],
+    "Class 2": [
+      100,
+      120
+    ],
+    "Class 3": [
+      120,
+      180
+    ],
+    "Class 4": [
+      180,
+      1000
+    ],
+    "Class 5": [
+      120,
+      300
+    ],
+    "Class 6": [
+      0,
+      60
+    ]
+  },
+  "use_six_class": true,
+  "perspective_source": null,
+  "perspective_target_width": 25,
+  "perspective_target_height": 250,
+  "pixels_per_meter": 0.5,
+  "time_scale_factor": 1.0,
+  "output_dir": "vehicle_captures",
+  "save_crops": true,
+  "save_snapshots": false,
+  "log_individual": true,
+  "log_summary": true,
+  "summary_bucket_minutes": 1,
+  "mqtt_enabled": false,
+  "mqtt_broker": "localhost",
+  "mqtt_port": 1883,
+  "mqtt_username": null,
+  "mqtt_password": null,
+  "mqtt_topic_prefix": "traffic/data",
+  "stream_enabled": false,
+  "stream_url": null,
+  "stream_use_nvenc": false
+}
