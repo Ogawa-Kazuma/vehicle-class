@@ -1,4 +1,9 @@
 import os
+# Disable NNPACK to avoid "Unsupported Hardware" error on unsupported CPUs
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+os.environ['USE_NNPACK'] = '0'
+os.environ['OMP_NUM_THREADS'] = '1'
+
 import csv
 import cv2
 import ssl
