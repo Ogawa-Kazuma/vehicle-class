@@ -41,7 +41,7 @@ TARGET = np.array(
 
 # 3. PIXELS_PER_METER_SCALE: The primary calibration factor.
 # Adjust this value until a vehicle traveling at a known speed (e.g., 50 km/h) is displayed correctly.
-PIXELS_PER_METER_SCALE = 0.5 # <<--- ADJUST THIS VALUE FOR ACCURACY (< 1)
+PIXELS_PER_METER_SCALE = 0.2 # <<--- ADJUST THIS VALUE FOR ACCURACY (< 1)
 
 # 4. TIME_SCALE_FACTOR: Correction for videos where 1 video second != 1 real-world second.
 # Use 1.5 since your video runs slower (1 video second = 1.5 real seconds).
@@ -89,7 +89,7 @@ SHORTCUTS = OrderedDict([
 # --- MQTT CONFIG ---
 MQTT_BROKER = "broker.react.net.my"
 MQTT_PORT = 8883 # Secure port
-MQTT_TOPIC = "kkr/stl/ai/data" # New Topic from user request
+MQTT_TOPIC = "kkr/stl/ai/data/live" # New Topic from user request
 MQTT_USER = "test_ai_stl"
 MQTT_PASSWORD = "test_ai_stl_2025" 
 MQTT_CLIENT_ID = "ppk_video"
@@ -187,6 +187,8 @@ class ViewTransformer:
 def get_config_path(stream_source):
     """Generates the path for the config JSON file based on the video path or stream identifier."""
     global is_live_stream
+    # Save config files in the same directory as the script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     if is_live_stream:
         # For live streams, use STREAM_NAME
         config_name = f"{STREAM_NAME}_config.json"
@@ -194,7 +196,7 @@ def get_config_path(stream_source):
         # For files, use filename
         video_name = os.path.basename(stream_source)
         config_name = f"{os.path.splitext(video_name)[0]}_config.json"
-    return os.path.join(OUT_DIR, config_name)
+    return os.path.join(script_dir, config_name)
 
 def load_config(stream_source):
     """Loads configuration data from a JSON file."""
@@ -205,14 +207,30 @@ def load_config(stream_source):
                 config = json.load(f)
                 print(f"[INFO] Loaded configuration from {config_path}")
                 
-                # Load perspective points
+                # Load perspective points with validation
                 global perspective_points
                 loaded_perspective = config.get('perspective_points')
-                if loaded_perspective and len(loaded_perspective) == 4:
-                    perspective_points = loaded_perspective # Load list of points
-                    print("[INFO] Loaded custom perspective points.")
+                if loaded_perspective:
+                    # Validate format: should be a list of 4 points, each with 2 coordinates
+                    if isinstance(loaded_perspective, list) and len(loaded_perspective) == 4:
+                        # Validate each point has 2 coordinates
+                        if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in loaded_perspective):
+                            perspective_points = [[float(p[0]), float(p[1])] for p in loaded_perspective]
+                            print("[INFO] Loaded custom perspective points.")
+                        else:
+                            print("[WARN] Invalid perspective_points format in config. Using defaults.")
+                            perspective_points = []
+                    else:
+                        print(f"[WARN] Invalid perspective_points count in config (expected 4, got {len(loaded_perspective) if loaded_perspective else 0}). Using defaults.")
+                        perspective_points = []
+                else:
+                    perspective_points = []
 
                 return config
+        except json.JSONDecodeError as e:
+            print(f"[WARN] Config file is corrupted or incomplete: {e}")
+            print(f"[WARN] You may need to recalibrate. Config file: {config_path}")
+            return {}
         except Exception as e:
             print(f"[WARN] Failed to load config from {config_path}: {e}")
             return {}
@@ -225,15 +243,37 @@ def save_config(stream_source, config_data):
     
     # NEW: Save the perspective points
     global perspective_points
-    config_data['perspective_points'] = perspective_points
+    
+    # Convert perspective_points to list of lists (ensure JSON-serializable)
+    # Handle both tuples and lists, and ensure all values are native Python types
+    if perspective_points:
+        config_data['perspective_points'] = [
+            [float(p[0]), float(p[1])] for p in perspective_points
+        ]
+    else:
+        config_data['perspective_points'] = []
     
     try:
-        with open(config_path, 'w') as f:
+        # Write to temporary file first, then rename (atomic write)
+        temp_path = config_path + '.tmp'
+        with open(temp_path, 'w') as f:
             json.dump(config_data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())  # Force write to disk
+        
+        # Atomic rename (only if write succeeded)
+        os.replace(temp_path, config_path)
         print(f"[INFO] Saved configuration to {config_path}")
         return True
     except Exception as e:
         print(f"[ERROR] Failed to save config to {config_path}: {e}")
+        # Clean up temp file if it exists
+        temp_path = config_path + '.tmp'
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
         return False
 
 
@@ -902,7 +942,7 @@ def process_stream(stream_source):
     
     # Configure capture options for RTSP streams
     if is_live_stream and stream_source.startswith('rtsp://'):
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = "rtsp_transport;tcp|max_delay;0|reorder_queue_size;0|stimeout;3000000"
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = "rtsp_transport;tcp|max_delay;0|reorder_queue_size;0|stimeout;3000000|fflags;nobuffer|flags;low_delay"
     
     cap = cv2.VideoCapture(stream_source)
     
@@ -910,6 +950,8 @@ def process_stream(stream_source):
     if is_live_stream:
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, STREAM_BUFFER_SIZE)
+            # Additional properties for low latency
+            cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
         except Exception:
             pass
     
@@ -1017,12 +1059,32 @@ def process_stream(stream_source):
     reconnect_attempts = 0
     
     while True: 
+        # Check for exit flag at the start of each iteration
+        if force_exit:
+            print("[INFO] Exit requested. Terminating.")
+            break
         
         if start_processing:
-            ret, frame = cap.read()
+            # For live streams, drop old buffered frames to get the latest one
+            if is_live_stream:
+                # Grab the latest frame, dropping any buffered ones
+                ret = False
+                frame = None
+                for _ in range(10):  # Try to get the latest frame (drop up to 9 old ones)
+                    temp_ret, temp_frame = cap.read()
+                    if temp_ret:
+                        ret = temp_ret
+                        frame = temp_frame
+                    else:
+                        break
+            else:
+                ret, frame = cap.read()
             
             # Handle stream reconnection for live sources
             if not ret and is_live_stream:
+                if force_exit:
+                    break
+                    
                 read_failures += 1
                 if read_failures % 30 == 0:  # Log every 30 failures
                     print(f"[WARN] Failed to read frame from stream (failures: {read_failures})")
@@ -1035,11 +1097,12 @@ def process_stream(stream_source):
                     
                     # Reopen stream
                     if stream_source.startswith('rtsp://'):
-                        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = "rtsp_transport;tcp|max_delay;0|reorder_queue_size;0|stimeout;3000000"
+                        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = "rtsp_transport;tcp|max_delay;0|reorder_queue_size;0|stimeout;3000000|fflags;nobuffer|flags;low_delay"
                     cap = cv2.VideoCapture(stream_source)
                     if is_live_stream:
                         try:
                             cap.set(cv2.CAP_PROP_BUFFERSIZE, STREAM_BUFFER_SIZE)
+                            cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
                         except Exception:
                             pass
                     
@@ -1065,7 +1128,21 @@ def process_stream(stream_source):
                 read_failures = 0
                 reconnect_attempts = 0
         else:
-            ret, frame = cap.read()
+            # For live streams, drop old buffered frames to get the latest one
+            if is_live_stream:
+                # Grab the latest frame, dropping any buffered ones
+                ret = False
+                frame = None
+                for _ in range(10):  # Try to get the latest frame (drop up to 9 old ones)
+                    temp_ret, temp_frame = cap.read()
+                    if temp_ret:
+                        ret = temp_ret
+                        frame = temp_frame
+                    else:
+                        break
+            else:
+                ret, frame = cap.read()
+            
             if not ret:
                 if is_live_stream:
                     continue  # Keep trying for live streams
@@ -1111,6 +1188,10 @@ def process_stream(stream_source):
                 current_minute = current_dt.strftime("%H:%M") 
 
         # --- DRAW UI ---
+        # Safety check: ensure frame is valid before processing
+        if frame is None:
+            continue
+            
         display = draw_ui(frame.copy(), frame_width, frame_height, line_zone, polygon_points)
         
         if start_processing: 
@@ -1292,13 +1373,22 @@ def process_stream(stream_source):
                         minute_class_counts_1min[class_name] += 1
                         minute_class_counts_15min[class_name] += 1 
                         
-                    # --- METRIC AGGREGATION PLACEHOLDER ---
-                    # IMPORTANT: For now, we are appending 0.0 to the aggregation lists
-                    # because the necessary computer vision logic is missing.
-                    agg_speeds.append(0.0) 
+                    # --- METRIC AGGREGATION ---
+                    # Calculate speed when vehicle crosses the line
+                    vehicle_speed = 0.0
+                    if view_transformer is not None and len(perspective_points) == 4 and len(coordinates[tracker_id]) > fps / 2:
+                        coordinate_start = coordinates[tracker_id][-1]  # latest
+                        coordinate_end = coordinates[tracker_id][0]     # oldest
+                        distance_pixels = abs(coordinate_start - coordinate_end)
+                        distance_meters = distance_pixels * PIXELS_PER_METER_SCALE
+                        time_secs = (len(coordinates[tracker_id]) / fps) * TIME_SCALE_FACTOR
+                        if time_secs > 0:
+                            vehicle_speed = (distance_meters / time_secs) * 3.6  # km/h
+                    
+                    agg_speeds.append(vehicle_speed)
                     agg_headways.append(0.0) 
                     agg_gaps.append(0.0) 
-                    # --- END METRIC AGGREGATION PLACEHOLDER ---
+                    # --- END METRIC AGGREGATION ---
 
 
             logged_tracker_ids = logged_tracker_ids.intersection(current_tracker_ids) 
@@ -1347,7 +1437,10 @@ def process_stream(stream_source):
         if DISPLAY_SCALE != 1.0:
             display = cv2.resize(display, (int(frame_width * DISPLAY_SCALE), int(frame_height * DISPLAY_SCALE)))
 
-        if fps > 0 and start_processing: 
+        # For live streams, use minimal wait time to reduce latency (both when processing and not)
+        if is_live_stream:
+            wait_time_ms = 1  # Minimal wait for live streams
+        elif fps > 0 and start_processing: 
             wait_time_ms = max(1, int(1000 / fps)) 
         else: 
             wait_time_ms = 100 
@@ -1439,6 +1532,9 @@ def process_stream(stream_source):
             elif poly_editing and len(polygon_points) < 3:
                 print("[WARN] Need at least 3 points to define a polygon.")
 
+        # Check for exit after key handling
+        if force_exit:
+            break
 
     # Final summary log entry
     if summary_log_writer is not None and last_minute is not None:
