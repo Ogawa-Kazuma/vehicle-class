@@ -736,6 +736,11 @@ def elicit_start_time(stream_source: str) -> bool:
     
     global run_date, run_start_time, global_offset_dt, root, start_dt
     
+    # Initialize root window if it doesn't exist
+    if root is None:
+        root = tk.Tk()
+        root.withdraw()  # Hide the root window initially
+    
     root.deiconify() 
     time_data = elicit_time_gui()
     root.withdraw()
@@ -766,26 +771,42 @@ def elicit_start_time(stream_source: str) -> bool:
 def initial_start_and_reset(cap, stream_source, frame_width, frame_height):
     """Resets counters and starts processing. Used for initial start or full reset."""
     global start_processing, line_zone, logged_tracker_ids, total_class_counts, run_date, run_start_time, start_dt, last_publish_time
-    global agg_speeds, agg_headways, agg_gaps, agg_occupancy_frames, stream_start_time, is_live_stream # NEW: Reset metric lists
+    global agg_speeds, agg_headways, agg_gaps, agg_occupancy_frames, stream_start_time, is_live_stream, global_offset_dt # NEW: Reset metric lists
 
     # 1. Check/Elicit Time
-    if run_date is None or run_start_time is None:
-        print("[PROMPT] Configuration time missing. Please enter run time in GUI pop-up.")
-        if not elicit_start_time(stream_source):
-            print("[WARN] Start aborted: Time not set.")
-            return 
+    if is_live_stream:
+        # For live streams, use current time automatically
+        start_dt = datetime.now()
+        run_date = start_dt.strftime("%Y-%m-%d")
+        run_start_time = start_dt.strftime("%H:%M:%S")
+        global_offset_dt = start_dt
+        last_publish_time = start_dt
+        stream_start_time = datetime.now()  # Record real-time start for live streams
         
-    if run_date and run_start_time:
-        start_dt_str = f"{run_date} {run_start_time}"
-        try:
-            start_dt = datetime.strptime(start_dt_str, "%Y-%m-%d %H:%M:%S")
-            last_publish_time = start_dt
-            if is_live_stream:
-                stream_start_time = datetime.now()  # Record real-time start for live streams
-        except ValueError as e:
-            print(f"[ERROR] Invalid saved time format: {e}")
-            start_dt = None
-            return 
+        # Save to config
+        config_data = load_config(stream_source)
+        config_data['run_date'] = run_date
+        config_data['run_start_time'] = run_start_time
+        save_config(stream_source, config_data)
+        
+        print(f"[INFO] Live stream started at: {run_date} {run_start_time}")
+    else:
+        # For video files, check/elicit time
+        if run_date is None or run_start_time is None:
+            print("[PROMPT] Configuration time missing. Please enter run time in GUI pop-up.")
+            if not elicit_start_time(stream_source):
+                print("[WARN] Start aborted: Time not set.")
+                return 
+        
+        if run_date and run_start_time:
+            start_dt_str = f"{run_date} {run_start_time}"
+            try:
+                start_dt = datetime.strptime(start_dt_str, "%Y-%m-%d %H:%M:%S")
+                last_publish_time = start_dt
+            except ValueError as e:
+                print(f"[ERROR] Invalid saved time format: {e}")
+                start_dt = None
+                return 
     
     # 2. Rewind Video (only for file sources)
     if not is_live_stream:
@@ -1550,18 +1571,26 @@ def process_stream(stream_source):
         print("[INFO] Disconnecting MQTT client.")
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
+    
+    # Clean up tkinter root window
+    global root
+    if root is not None:
+        root.destroy()
+        root = None
 
     print("[INFO] Processing finished. Logs saved.")
 
 
 def get_stream_url():
     """Get stream URL from user input or configuration."""
-    global STREAM_URL, USE_LIVE_STREAM
+    global STREAM_URL, USE_LIVE_STREAM, root
     
-    if USE_LIVE_STREAM:
+    # Initialize root window if it doesn't exist
+    if root is None:
         root = tk.Tk()
         root.withdraw()
-        
+    
+    if USE_LIVE_STREAM:
         if STREAM_URL:
             # Use configured URL
             stream_source = STREAM_URL
@@ -1574,8 +1603,6 @@ def get_stream_url():
                 initialvalue="rtsp://"
             )
         
-        root.destroy()
-        
         if stream_source:
             return stream_source
         else:
@@ -1583,13 +1610,10 @@ def get_stream_url():
             return None
     else:
         # Use file dialog
-        root = tk.Tk()
-        root.withdraw()
         video_file_path = filedialog.askopenfilename(
             title="Select Video File to Process",
             filetypes=[("Video files", "*.mp4 *.avi *.mov")]
         )
-        root.destroy()
         return video_file_path
 
 
