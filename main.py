@@ -18,7 +18,8 @@ from supervision.draw.utils import draw_text
 from supervision.detection.core import Detections
 from supervision.detection.line_zone import LineZone
 from collections import defaultdict, OrderedDict, deque
-from supervision.detection.tools.polygon_zone import PolygonZone 
+from supervision.detection.tools.polygon_zone import PolygonZone
+import torch 
 
 # --- SPEED ESTIMATION CONSTANTS (Requires Calibration!) ---
 # You MUST adjust the SOURCE array and the PIXELS_PER_METER_SCALE for accuracy.
@@ -959,6 +960,15 @@ def process_stream(stream_source):
                      stream_source.startswith('tcp://'))
 
     # --- INITIALIZATION ---
+    # Detect GPU availability and set device accordingly
+    if torch.cuda.is_available():
+        device = 0  # Use first GPU
+        device_name = torch.cuda.get_device_name(0)
+        print(f"[INFO] GPU detected: {device_name}. Using GPU for inference.")
+    else:
+        device = 'cpu'
+        print("[INFO] No GPU detected. Falling back to CPU for inference.")
+    
     model = YOLO(MODEL_PATH)
     
     # Configure capture options for RTSP streams
@@ -1218,7 +1228,7 @@ def process_stream(stream_source):
         if start_processing: 
             
             # --- MODEL PREDICTION & TRACKING ---
-            results = model(frame, device = 0, verbose=False)[0]
+            results = model(frame, device=device, verbose=False)[0]
             detections = Detections.from_ultralytics(results)
             detections = detections[detections.confidence >= MIN_CONF]
             detections = detections[np.isin(detections.class_id, list(CLASS_MAP.keys()))]
