@@ -1,4 +1,6 @@
 import os
+import sys
+import contextlib
 # Disable NNPACK to avoid "Unsupported Hardware" error on unsupported CPUs
 os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
 os.environ['USE_NNPACK'] = '0'
@@ -974,7 +976,12 @@ def process_stream(stream_source):
         device = 'cpu'
         print("[INFO] No GPU detected. Falling back to CPU for inference.")
     
-    model = YOLO(MODEL_PATH)
+    # Suppress NNPACK error messages for unsupported hardware (especially in VMs)
+    print("[INFO] Loading YOLO model...")
+    with open(os.devnull, 'w') as devnull:
+        with contextlib.redirect_stderr(devnull):
+            model = YOLO(MODEL_PATH)
+    print("[INFO] YOLO model loaded successfully.")
     
     # Configure capture options for RTSP streams
     if is_live_stream and stream_source.startswith('rtsp://'):
