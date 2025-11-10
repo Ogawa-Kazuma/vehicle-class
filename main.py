@@ -107,7 +107,7 @@ PUBLISH_INTERVAL_MINUTES = 1
 # --- STREAM CONFIG ---
 STREAM_RECONNECT_DELAY = 2  # seconds to wait before reconnecting
 STREAM_MAX_RECONNECT_ATTEMPTS = 10  # max reconnection attempts before giving up
-STREAM_BUFFER_SIZE = 1  # reduce buffer for low latency
+STREAM_BUFFER_SIZE = 0  # reduce buffer for low latency
 # --- END STREAM CONFIG ---
 
 # --- GLOBAL STATE VARIABLES ---
@@ -985,7 +985,16 @@ def process_stream(stream_source):
     
     # Configure capture options for RTSP streams
     if is_live_stream and stream_source.startswith('rtsp://'):
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = "rtsp_transport;tcp|max_delay;0|reorder_queue_size;0|stimeout;3000000|fflags;nobuffer|flags;low_delay"
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+            "rtsp_transport;tcp"
+            "|max_delay;0"
+            "|reorder_queue_size;0"
+            "|fflags;nobuffer"
+            "|flags;low_delay"
+            "|packet_size;1316"
+            "|buffer_size;0"
+            "|stimeout;3000000"
+        )
     
     cap = cv2.VideoCapture(stream_source)
     
@@ -994,7 +1003,7 @@ def process_stream(stream_source):
         try:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, STREAM_BUFFER_SIZE)
             # Additional properties for low latency
-            cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
+            cap.set(cv2.CAP_PROP_FPS, 60)  # Set expected FPS
         except Exception:
             pass
     
@@ -1108,17 +1117,27 @@ def process_stream(stream_source):
             break
         
         if start_processing:
-            # For live streams, drop old buffered frames to get the latest one
             if is_live_stream:
-                # Grab the latest frame, dropping any buffered ones
                 ret = False
                 frame = None
-                for _ in range(10):  # Try to get the latest frame (drop up to 9 old ones)
+                start_flush = time.perf_counter()
+                flush_iterations = 0
+                while True:
+                    read_start = time.perf_counter()
                     temp_ret, temp_frame = cap.read()
-                    if temp_ret:
-                        ret = temp_ret
-                        frame = temp_frame
-                    else:
+                    read_duration = time.perf_counter() - read_start
+                    flush_iterations += 1
+                    if not temp_ret:
+                        ret = False
+                        frame = None
+                        break
+                    ret = temp_ret
+                    frame = temp_frame
+                    # Stop once reads block for a meaningful duration (buffer drained)
+                    if read_duration > 0.01:
+                        break
+                    # Safety stop to avoid tight infinite loop
+                    if flush_iterations >= 200 or (time.perf_counter() - start_flush) > 0.2:
                         break
             else:
                 ret, frame = cap.read()
@@ -1140,12 +1159,21 @@ def process_stream(stream_source):
                     
                     # Reopen stream
                     if stream_source.startswith('rtsp://'):
-                        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = "rtsp_transport;tcp|max_delay;0|reorder_queue_size;0|stimeout;3000000|fflags;nobuffer|flags;low_delay"
+                        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+                            "rtsp_transport;tcp"
+                            "|max_delay;0"
+                            "|reorder_queue_size;0"
+                            "|fflags;nobuffer"
+                            "|flags;low_delay"
+                            "|packet_size;1316"
+                            "|buffer_size;0"
+                            "|stimeout;3000000"
+                        )
                     cap = cv2.VideoCapture(stream_source)
                     if is_live_stream:
                         try:
                             cap.set(cv2.CAP_PROP_BUFFERSIZE, STREAM_BUFFER_SIZE)
-                            cap.set(cv2.CAP_PROP_FPS, 30)  # Set expected FPS
+                            cap.set(cv2.CAP_PROP_FPS, 60)  # Set expected FPS
                         except Exception:
                             pass
                     
@@ -1171,17 +1199,25 @@ def process_stream(stream_source):
                 read_failures = 0
                 reconnect_attempts = 0
         else:
-            # For live streams, drop old buffered frames to get the latest one
             if is_live_stream:
-                # Grab the latest frame, dropping any buffered ones
                 ret = False
                 frame = None
-                for _ in range(10):  # Try to get the latest frame (drop up to 9 old ones)
+                start_flush = time.perf_counter()
+                flush_iterations = 0
+                while True:
+                    read_start = time.perf_counter()
                     temp_ret, temp_frame = cap.read()
-                    if temp_ret:
-                        ret = temp_ret
-                        frame = temp_frame
-                    else:
+                    read_duration = time.perf_counter() - read_start
+                    flush_iterations += 1
+                    if not temp_ret:
+                        ret = False
+                        frame = None
+                        break
+                    ret = temp_ret
+                    frame = temp_frame
+                    if read_duration > 0.01:
+                        break
+                    if flush_iterations >= 200 or (time.perf_counter() - start_flush) > 0.2:
                         break
             else:
                 ret, frame = cap.read()
